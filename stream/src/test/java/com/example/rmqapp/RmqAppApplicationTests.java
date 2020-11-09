@@ -1,10 +1,10 @@
-package com.example.producer;
+package com.example.rmqapp;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 
 @SpringBootTest
-class ProducerApplicationTests {
+class RmqAppApplicationTests {
 
 	@Test
 	void contextLoads() {
