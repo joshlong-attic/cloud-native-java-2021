@@ -19,6 +19,8 @@ class BootifulK8sApplication {
   fun http(publisher: ApplicationEventPublisher) = router {
 
 
+
+
     GET("/slow") {
       val slowReply = Mono
           .just("Hello world!")
