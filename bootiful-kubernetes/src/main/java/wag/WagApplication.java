@@ -50,18 +50,15 @@ public class WagApplication {
 			.build();
 	}
 
+
 	@Bean
-	ApplicationListener<ApplicationReadyEvent> ready(
-		DatabaseClient dbc,
-		ReservationRepository rr) {
-		return event -> {
-			dbc
-				.sql("create table reservation(id serial primary key, name varchar(255) not null) ").fetch().rowsUpdated()
-				.thenMany(rr.saveAll(Flux.just(new Reservation(null, "Andy"), new Reservation(null, "Josh"))))
-				.thenMany(rr.findAll())
-				.subscribe(System.out::println);
-		};
+	ApplicationListener<ApplicationReadyEvent> ready(DatabaseClient dbc, ReservationRepository rr) {
+		return event -> rr
+			.saveAll(Flux.just(new Reservation(null, "Andy"), new Reservation(null, "Josh")))
+			.thenMany(rr.findAll())
+			.subscribe(System.out::println);
 	}
+
 }
 
 interface ReservationRepository extends ReactiveCrudRepository<Reservation, Integer> {
