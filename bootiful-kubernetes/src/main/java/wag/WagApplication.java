@@ -49,8 +49,7 @@ public class WagApplication {
 			})
 			.build();
 	}
-
-
+	
 	@Bean
 	ApplicationListener<ApplicationReadyEvent> ready(DatabaseClient dbc, ReservationRepository rr) {
 		return event -> rr
