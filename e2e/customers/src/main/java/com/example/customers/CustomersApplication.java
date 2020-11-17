@@ -33,15 +33,16 @@ public class CustomersApplication {
 		SpringApplication.run(CustomersApplication.class, args);
 	}
 
-	@Bean
-	Consumer<Flux<Map<String, Integer>>> updatesConsumer(CustomerRepository customerRepository) {
-		return (Flux<Map<String, Integer>> mapFlux) -> mapFlux
-			.map(map -> map.get("customer-deletion"))
-			.doOnNext( id -> System.out.println("deleting #"+id ))
-			.flatMap(customerRepository::deleteById)
-			.subscribe();
-	}
 
+	@Bean
+	Consumer<Flux<Integer>> customerDeletionsConsumer(CustomerRepository customerRepository) {
+		return customerIds ->
+			customerIds
+				.doOnNext(cid -> System.out.println("customerId to delete: " + cid))
+				.flatMap(customerRepository::deleteById)
+				.subscribe();
+	}
+	
 	@Bean
 	RouterFunction<ServerResponse> routes(ApplicationContext context, CustomerRepository cr) {
 		return route()
