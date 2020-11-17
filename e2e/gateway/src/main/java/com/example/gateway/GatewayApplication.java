@@ -87,13 +87,13 @@ public class GatewayApplication {
 			.build();
 	}
 
-
-	private final Sinks.Many<Map<String, Object>> customerUpdates = Sinks.many().multicast().onBackpressureBuffer();
+	private final Sinks.Many<Integer> objectMany = Sinks.many().multicast().onBackpressureBuffer();
 
 	@Bean
-	Supplier<Flux<Map<String, Object>>> customerUpdatesSupplier() {
-		return customerUpdates::asFlux;
+	Supplier<Flux<Integer>> customerDeletionsSupplier() {
+		return objectMany::asFlux;
 	}
+
 
 	public static void main(String[] args) {
 		SpringApplication.run(GatewayApplication.class, args);
