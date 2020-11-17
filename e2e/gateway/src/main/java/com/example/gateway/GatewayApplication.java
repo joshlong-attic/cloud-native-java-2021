@@ -78,10 +78,10 @@ public class GatewayApplication {
 //		Flux<String> stringFlux = Flux.firstWithValue(host1, host2, host3);
 
 		return route()
-			.DELETE("/cos/{customerId}", req -> {
-				var cid = Integer.parseInt(req.pathVariable("customerId"));
-				var result = customerUpdates.tryEmitNext(Collections.singletonMap("customer-deletion", cid));
-				return ServerResponse.ok().bodyValue(result.isSuccess());
+			.DELETE("/cos/{cid}", serverRequest -> {
+				var cid = Integer.parseInt(serverRequest.pathVariable("cid"));
+				var emitResult = objectMany.tryEmitNext(cid);
+				return ServerResponse.ok().bodyValue(Collections.singletonMap(cid, emitResult.isSuccess()));
 			})
 			.GET("/cos", req -> ServerResponse.ok().body(crmClient.getCustomerOrders(), CustomerOrders.class))
 			.build();
