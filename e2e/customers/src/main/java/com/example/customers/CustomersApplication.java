@@ -3,7 +3,6 @@ package com.example.customers;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.availability.AvailabilityChangeEvent;
@@ -14,13 +13,10 @@ import org.springframework.context.ApplicationListener;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.repository.reactive.ReactiveCrudRepository;
-import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.ServerResponse;
 import reactor.core.publisher.Flux;
 
-import java.util.Collections;
-import java.util.Map;
 import java.util.function.Consumer;
 
 import static org.springframework.web.reactive.function.server.RouterFunctions.route;
@@ -34,66 +30,43 @@ public class CustomersApplication {
 	}
 
 	@Bean
-	Consumer<Flux<Map<String, Integer>>> updatesConsumer(CustomerRepository customerRepository) {
-		return (Flux<Map<String, Integer>> mapFlux) -> mapFlux
-			.map(map -> map.get("customer-deletion"))
-			.doOnNext( id -> System.out.println("deleting #"+id ))
-			.flatMap(customerRepository::deleteById)
-			.subscribe();
-	}
-
-	@Bean
-	RouterFunction<ServerResponse> routes(ApplicationContext context, CustomerRepository cr) {
+	RouterFunction<ServerResponse> routes(ApplicationContext ac, CustomerRepository customerRepository) {
 		return route()
-			.GET("/customers", r -> ok().body(cr.findAll(), Customer.class))
-			.GET("/down", r -> {
-				AvailabilityChangeEvent.publish(context, LivenessState.BROKEN);
-				return ServerResponse.ok().bodyValue(Collections.singletonMap("down", true));
+			.GET("/down", serverRequest -> {
+				AvailabilityChangeEvent.publish(ac, this, LivenessState.BROKEN);
+				return ServerResponse.ok().bodyValue("down");
 			})
+			.GET("/customers", r -> ok().body(customerRepository.findAll(), Customer.class))
 			.build();
 	}
 
 	@Bean
-	ApplicationListener<AvailabilityChangeEvent> availabilityChangeEventApplicationListener() {
-		return availabilityChangeEvent -> System.out.println(availabilityChangeEvent.getState().toString());
+	Consumer<Flux<Integer>> customerDeletionsConsumer(CustomerRepository customerRepository) {
+		return customerIds ->
+			customerIds
+				.doOnNext(cid -> System.out.println("deleting orders for customerId # " + cid))
+				.flatMap(customerRepository::deleteById)
+				.subscribe();
 	}
 
 	@Bean
-	ApplicationListener<ApplicationReadyEvent> ready(@Value("${hello}") String hello,
-																																																		DatabaseClient dbc, CustomerRepository repository) {
+	ApplicationListener<ApplicationReadyEvent> ready(CustomerRepository cr) {
 		return event -> {
-			System.out.println("Hello, " + hello + "!");
+	/*		var id = new AtomicInteger();
+			var delete = cr.deleteAll();
 			var names = Flux
-				.just("Madhura", "Olga", "Yuxin", "Violetta", "Dr. Syer", "Stéphane", "Spencer", "Josh")
+				.just("Yuxin", "Spencer", "Madhura", "Olga", "Violetta", "Stéphane", "Rob", "Josh")
 				.map(name -> new Customer(null, name))
-				.flatMap(repository::save);
-			var sql = """
-				 create table CUSTOMER(
-				 	id serial primary key, 
-				 	name varchar(255) not null
-					);
-				""";
-			dbc.sql(sql).fetch().rowsUpdated()
+				.flatMap(cr::save);
+			var all = cr.findAll();
+			delete
 				.thenMany(names)
-				.thenMany(repository.findAll())
-				.subscribe(System.out::println);
+				.thenMany(all)
+				.onErrorResume(ex -> Flux.error(new RuntimeException("")))
+				.subscribe(System.out::println);*/
 		};
 	}
-
 }
-
-/*
-@RestController
-@RequiredArgsConstructor
-class CustomerRestController {
-
-	private final CustomerRepository customerRepository;
-
-	@GetMapping("/customers")
-	Flux<Customer> getCustomers() {
-		return this.customerRepository.findAll();
-	}
-}*/
 
 
 interface CustomerRepository extends ReactiveCrudRepository<Customer, Integer> {

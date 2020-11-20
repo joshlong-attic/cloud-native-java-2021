@@ -11,102 +11,82 @@ import org.springframework.cloud.gateway.route.RouteLocator;
 import org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.http.HttpHeaders;
+import org.springframework.messaging.rsocket.RSocketRequester;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.server.HandlerFunction;
 import org.springframework.web.reactive.function.server.RouterFunction;
+import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.util.retry.Retry;
 
+import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 import java.util.function.Supplier;
 
 import static org.springframework.web.reactive.function.server.RouterFunctions.route;
+import static org.springframework.web.reactive.function.server.ServerResponse.ok;
+
 
 @SpringBootApplication
 public class GatewayApplication {
 
+	private final Sinks.Many<Integer> customerDeletions = Sinks.many().multicast().onBackpressureBuffer();
+
 	@Bean
-	WebClient webClient(WebClient.Builder builder, LoadBalancedExchangeFilterFunction exchangeFilterFunction) {
-		return builder.filter(exchangeFilterFunction).build();
+	Supplier<Flux<Integer>> customerDeletionsSupplier() {
+		return customerDeletions::asFlux;
 	}
 
+	@Bean
+	RouterFunction<ServerResponse> routes(CrmClient crmClient) {
+		return route()
+			.DELETE("/cos/{customerId}", serverRequest -> {
+				var customerId = Integer.parseInt(serverRequest.pathVariable("customerId"));
+				var emitResult = customerDeletions.tryEmitNext(customerId);
+				return ServerResponse.ok().bodyValue(Collections.singletonMap(customerId, emitResult.isSuccess()));
+			})
+			.GET("/cos", serverRequest -> ok().body(crmClient.getCustomerOrders(), CustomerOrders.class))
+			.build();
+	}
 
 	@Bean
-	RouteLocator mySimpleGateway(RouteLocatorBuilder rlb) {
+	RouteLocator routeLocator(RouteLocatorBuilder rlb) {
 		return rlb
 			.routes()
-
 			.route(rs -> rs
 				.path("/proxy")
 				.filters(fs -> fs
 					.setPath("/customers")
 					.addResponseHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, "*")
 				)
-				.uri("lb://customers/")
+				.uri("lb://customers")
 			)
 			.build();
-	}
-
-	@Bean
-	RouterFunction<ServerResponse> routes(CrmClient crmClient) {
-
-/*
-	Flux<String> resultsFromSomeService = null ;//todo
-	Flux<String> stringFlux = resultsFromSomeService
-			.timeout(Duration.ofSeconds(10))
-			.retryWhen(Retry.backoff(10, Duration.ofSeconds(1)))
-			.onErrorResume(exc -> Flux.empty());
-	*/
-
-	/*	ReactiveDiscoveryClient reactiveDiscoveryClient = null ;//
-		Flux<ServiceInstance> order = reactiveDiscoveryClient.getInstances("order");
-		Flux<String> map = order.take(3).map(si -> si.getHost() + ':' + si.getPort());
-		map.collectList().map( listOfServices -> {
-
-		})
-			.subscribe( );*/
-
-
-		// hedging
-//		Flux<String> host1 = null;
-//		Flux<String> host2 = null;
-//		Flux<String> host3 = null;
-//		Flux<String> stringFlux = Flux.firstWithValue(host1, host2, host3);
-
-		return route()
-			.DELETE("/cos/{customerId}", req -> {
-				var cid = Integer.parseInt(req.pathVariable("customerId"));
-				var result = customerUpdates.tryEmitNext(Collections.singletonMap("customer-deletion", cid));
-				return ServerResponse.ok().bodyValue(result.isSuccess());
-			})
-			.GET("/cos", req -> ServerResponse.ok().body(crmClient.getCustomerOrders(), CustomerOrders.class))
-			.build();
-	}
-
-
-	private final Sinks.Many<Map<String, Object>> customerUpdates = Sinks.many().multicast().onBackpressureBuffer();
-
-	@Bean
-	Supplier<Flux<Map<String, Object>>> customerUpdatesSupplier() {
-		return customerUpdates::asFlux;
 	}
 
 	public static void main(String[] args) {
 		SpringApplication.run(GatewayApplication.class, args);
 	}
 
+
+	@Bean
+	RSocketRequester rSocketRequester(RSocketRequester.Builder builder) {
+		return builder.connectTcp("localhost", 7777).block();
+	}
+
+	@Bean
+	WebClient httpClient(WebClient.Builder b,
+																						LoadBalancedExchangeFilterFunction eff) {
+		return b.filter(eff).build();
+	}
+
 }
 
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-class Order {
-	private Integer id, customerId;
-}
 
 @Data
 @AllArgsConstructor
@@ -114,6 +94,14 @@ class Order {
 class Customer {
 	private Integer id;
 	private String name;
+}
+
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+class Order {
+	private Integer id;
+	private Integer customerId;
 }
 
 @Data
@@ -128,20 +116,34 @@ class CustomerOrders {
 @RequiredArgsConstructor
 class CrmClient {
 
-	private final WebClient webClient;
-
-	Flux<Order> getOrdersFor(Integer customerId) {
-		return this.webClient.get().uri("http://orders/orders/{customerId}", customerId).retrieve().bodyToFlux(Order.class);
-	}
-
-	Flux<Customer> getCustomers() {
-		return this.webClient.get().uri("http://customers/customers").retrieve().bodyToFlux(Customer.class);
-	}
+	private final RSocketRequester rSocketRequester;
+	private final WebClient http;
 
 	Flux<CustomerOrders> getCustomerOrders() {
-		var customers = this.getCustomers();
-		var customerAndOrders = customers.flatMap(customer -> Flux.zip(Mono.just(customer), getOrdersFor(customer.getId()).collectList()));
-		return customerAndOrders.map(tuple -> new CustomerOrders(tuple.getT1(), tuple.getT2()));
+		var tuple2Flux = getAllCustomers()
+			.flatMap(customer -> Flux.zip(Mono.just(customer), getRSocketOrdersFor(customer.getId()).collectList()));
+		return tuple2Flux.map(tuple -> new CustomerOrders(tuple.getT1(), tuple.getT2()));
+	}
+
+	Flux<Order> getRSocketOrdersFor(Integer customerId) {
+		return this.rSocketRequester
+			.route("orders/{customerId}", customerId)
+			.retrieveFlux(Order.class);
+	}
+
+	Flux<Order> getOrdersFor(Integer customerId) {
+		return this.http
+			.get()
+			.uri("http://orders/orders/{customerId}", customerId)
+			.retrieve()
+			.bodyToFlux(Order.class)
+			.retryWhen(Retry.backoff(10, Duration.ofSeconds(1)))
+			.onErrorResume(ex -> Flux.empty())
+			.timeout(Duration.ofSeconds(20));
+	}
+
+	Flux<Customer> getAllCustomers() {
+		return this.http.get().uri("http://customers/customers").retrieve().bodyToFlux(Customer.class);
 	}
 
 }
