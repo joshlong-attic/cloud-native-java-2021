@@ -30,13 +30,13 @@ public class CustomersApplication {
 	}
 
 	@Bean
-	RouterFunction<ServerResponse> routes(ApplicationContext ac, CustomerRepository customerRepository) {
+	RouterFunction<ServerResponse> routes(ApplicationContext context, CustomerRepository cr) {
 		return route()
 			.GET("/down", serverRequest -> {
-				AvailabilityChangeEvent.publish(ac, this, LivenessState.BROKEN);
+				AvailabilityChangeEvent.publish(context, this, LivenessState.BROKEN);
 				return ServerResponse.ok().bodyValue("down");
 			})
-			.GET("/customers", r -> ok().body(customerRepository.findAll(), Customer.class))
+			.GET("/customers", r -> ok().body(cr.findAll(), Customer.class))
 			.build();
 	}
 

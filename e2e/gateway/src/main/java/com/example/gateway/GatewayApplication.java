@@ -14,9 +14,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.messaging.rsocket.RSocketRequester;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
-import org.springframework.web.reactive.function.server.HandlerFunction;
 import org.springframework.web.reactive.function.server.RouterFunction;
-import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -69,20 +67,25 @@ public class GatewayApplication {
 			.build();
 	}
 
-	public static void main(String[] args) {
-		SpringApplication.run(GatewayApplication.class, args);
-	}
-
-
 	@Bean
 	RSocketRequester rSocketRequester(RSocketRequester.Builder builder) {
 		return builder.connectTcp("localhost", 7777).block();
 	}
 
 	@Bean
-	WebClient httpClient(WebClient.Builder b,
-																						LoadBalancedExchangeFilterFunction eff) {
+	WebClient httpClient(WebClient.Builder b, LoadBalancedExchangeFilterFunction eff) {
 		return b.filter(eff).build();
+	}
+
+// hedging
+//		Flux<String> host1 = null;
+//		Flux<String> host2 = null;
+//		Flux<String> host3 = null;
+//		Flux<String> stringFlux = Flux.firstWithValue(host1, host2, host3);
+
+
+	public static void main(String[] args) {
+		SpringApplication.run(GatewayApplication.class, args);
 	}
 
 }
