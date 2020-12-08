@@ -3,6 +3,7 @@ package com.example.customers;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.RequiredArgsConstructor;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.availability.AvailabilityChangeEvent;
@@ -13,64 +14,69 @@ import org.springframework.context.ApplicationListener;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.repository.reactive.ReactiveCrudRepository;
-import org.springframework.web.reactive.function.server.RouterFunction;
-import org.springframework.web.reactive.function.server.ServerResponse;
+import org.springframework.r2dbc.core.DatabaseClient;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.util.function.Consumer;
 
-import static org.springframework.web.reactive.function.server.RouterFunctions.route;
-import static org.springframework.web.reactive.function.server.ServerResponse.ok;
-
 @SpringBootApplication
 public class CustomersApplication {
+
+	@Bean
+	Consumer<Flux<Integer>> customerDeletionsConsumer(CustomerRepository cr) {
+		return deletions -> deletions.flatMap(cr::deleteById).subscribe();
+	}
 
 	public static void main(String[] args) {
 		SpringApplication.run(CustomersApplication.class, args);
 	}
 
 	@Bean
-	RouterFunction<ServerResponse> routes(ApplicationContext context, CustomerRepository cr) {
-		return route()
-			.GET("/down", serverRequest -> {
-				AvailabilityChangeEvent.publish(context, this, LivenessState.BROKEN);
-				return ServerResponse.ok().bodyValue("down");
-			})
-			.GET("/customers", r -> ok().body(cr.findAll(), Customer.class))
-			.build();
-	}
-
-	@Bean
-	Consumer<Flux<Integer>> customerDeletionsConsumer(CustomerRepository customerRepository) {
-		return customerIds ->
-			customerIds
-				.doOnNext(cid -> System.out.println("deleting orders for customerId # " + cid))
-				.flatMap(customerRepository::deleteById)
-				.subscribe();
-	}
-
-	@Bean
-	ApplicationListener<ApplicationReadyEvent> ready(CustomerRepository cr) {
+	ApplicationListener<ApplicationReadyEvent> ready(
+		DatabaseClient dbc,
+		CustomerRepository repository) {
 		return event -> {
-	/*		var id = new AtomicInteger();
-			var delete = cr.deleteAll();
+
+
+			var sql = """
+				    
+					 create table CUSTOMER( 
+					 	 id serial primary key not null, 
+					 	 name varchar(255) not null
+					 ) 
+				""";
+
+			var integerMono = dbc.sql(sql).fetch().rowsUpdated();
+
 			var names = Flux
-				.just("Yuxin", "Spencer", "Madhura", "Olga", "Violetta", "Stéphane", "Rob", "Josh")
+				.just("Yuxin", "Olga", "Stéphane", "Spencer", "Violetta", "Madhura", "Josh", "Dr. Syer")
 				.map(name -> new Customer(null, name))
-				.flatMap(cr::save);
-			var all = cr.findAll();
-			delete
+				.flatMap(repository::save);
+
+			var all = repository.findAll();
+
+			integerMono
 				.thenMany(names)
 				.thenMany(all)
-				.onErrorResume(ex -> Flux.error(new RuntimeException("")))
-				.subscribe(System.out::println);*/
+				.subscribe(System.out::println);
+
+
 		};
 	}
+
 }
 
 
 interface CustomerRepository extends ReactiveCrudRepository<Customer, Integer> {
 }
+
+// data class Customer(val id: Int, name:String)
+// case class Customer(val id: Int,  name:String)
+// record Customer(INteger id, String name) {}
 
 @Data
 @AllArgsConstructor
@@ -81,4 +87,30 @@ class Customer {
 	private Integer id;
 
 	private String name;
+}
+
+@RestController
+@RequiredArgsConstructor
+class ProbesRestController {
+
+	private final ApplicationContext context;
+
+	@PostMapping("/down")
+	Mono<Boolean> down() {
+		AvailabilityChangeEvent.publish(this.context, LivenessState.BROKEN);
+		return Mono.just(true);
+	}
+}
+
+@RestController
+@RequiredArgsConstructor
+class CustomerRestController {
+
+	private final CustomerRepository customerRepository;
+
+	@GetMapping("/customers")
+	Flux<Customer> get() {
+		return this.customerRepository.findAll();
+	}
+
 }
