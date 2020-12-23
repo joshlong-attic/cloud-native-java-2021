@@ -32,61 +32,59 @@ import static org.springframework.web.reactive.function.server.RouterFunctions.r
 @SpringBootApplication
 public class GatewayApplication {
 
-	@Bean
-	WebClient webClient(
-		LoadBalancedExchangeFilterFunction eff,
-		WebClient.Builder builder) {
-		return builder.filter(eff).build();
-	}
+    private final Sinks.Many<Integer> deletions = Sinks.many().multicast().onBackpressureBuffer();
+
+    @Bean
+    WebClient webClient(WebClient.Builder builder) {
+        return builder.build();
+    }
 
 
-	private final Sinks.Many<Integer> deletions = Sinks.many().multicast().onBackpressureBuffer();
+    @Bean
+    Supplier<Flux<Integer>> customerDeletionsSupplier() {
+        return deletions::asFlux;
+    }
 
-	@Bean
-	Supplier<Flux<Integer>> customerDeletionsSupplier() {
-		return deletions::asFlux;
-	}
+    @Bean
+    RSocketRequester rSocketRequester(RSocketRequester.Builder builder) {
+        return builder.tcp("localhost", 8181);
+    }
 
-	@Bean
-	RSocketRequester rSocketRequester(RSocketRequester.Builder builder) {
-		return builder.tcp("localhost", 8181);
-	}
+    @Bean
+    RouterFunction<ServerResponse> routes(CrmClient crmClient) {
+        return route()
+                .DELETE("/cos/{customerId}", serverRequest -> {
+                    var cid = Integer.parseInt(serverRequest.pathVariable("customerId"));
+                    return ServerResponse.ok().bodyValue(deletions.tryEmitNext(cid).isSuccess());
+                })
+                .GET("/cos", serverRequest -> {
+                    var customerOrders = crmClient.getCustomerOrders();
+                    return ServerResponse.ok().body(customerOrders, CustomerOrders.class);
+                })
+                .build();
+    }
 
-	@Bean
-	RouterFunction<ServerResponse> routes(CrmClient crmClient) {
-		return route()
-			.DELETE("/cos/{customerId}", serverRequest -> {
-				var cid = Integer.parseInt(serverRequest.pathVariable("customerId"));
-				return ServerResponse.ok().bodyValue(deletions.tryEmitNext(cid).isSuccess());
-			})
-			.GET("/cos", serverRequest -> {
-				var customerOrders = crmClient.getCustomerOrders();
-				return ServerResponse.ok().body(customerOrders, CustomerOrders.class);
-			})
-			.build();
-	}
-
-	@Bean
-	RouteLocator myGateway(RouteLocatorBuilder rlb) {
-		return rlb
-			.routes()
-			.route(routeSpec ->
-				routeSpec
-					.path("/proxy")
-					.filters(filterSpec -> filterSpec
-						.setPath("/customers")
-						.retry(19)
-						.addResponseHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-					)
-					.uri("lb://customers/")
-			)
-			.build();
-	}
+    @Bean
+    RouteLocator myGateway(RouteLocatorBuilder rlb) {
+        return rlb
+                .routes()
+                .route(routeSpec ->
+                        routeSpec
+                                .path("/proxy")
+                                .filters(filterSpec -> filterSpec
+                                        .setPath("/customers")
+                                        .retry(19)
+                                        .addResponseHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                                )
+                                .uri("http://localhost:8082/")
+                )
+                .build();
+    }
 
 
-	public static void main(String[] args) {
-		SpringApplication.run(GatewayApplication.class, args);
-	}
+    public static void main(String[] args) {
+        SpringApplication.run(GatewayApplication.class, args);
+    }
 
 }
 
@@ -94,8 +92,8 @@ public class GatewayApplication {
 @AllArgsConstructor
 @NoArgsConstructor
 class Customer {
-	private Integer id;
-	private String name;
+    private Integer id;
+    private String name;
 }
 
 @Data
@@ -103,8 +101,8 @@ class Customer {
 @NoArgsConstructor
 class Order {
 
-	private Integer id;
-	private Integer customerId;
+    private Integer id;
+    private Integer customerId;
 }
 
 @Data
@@ -112,40 +110,33 @@ class Order {
 @NoArgsConstructor
 class CustomerOrders {
 
-	private Customer customer;
+    private Customer customer;
 
-	private List<Order> orders;
+    private List<Order> orders;
 }
 
 @Component
 @RequiredArgsConstructor
 class CrmClient {
 
-	private final RSocketRequester rSocketRequester;
-	private final WebClient http;
+    private final RSocketRequester rSocketRequester;
+    private final WebClient http;
 
-	Flux<CustomerOrders> getCustomerOrders() {
-		return getCustomers()
-			.flatMap(customer -> Flux.zip(Mono.just(customer), getOrdersFor(customer.getId()).collectList()))
-			.map(tuple -> new CustomerOrders(tuple.getT1(), tuple.getT2()));
-	}
-
-
-	Flux<Customer> getCustomers() {
-
-//		Flux<String> host1 = null;
-//		Flux<String> host2 = null;
-//		Flux<String> host3 = null; /// todo
-//		Flux<String> stringFlux = Flux.firstWithSignal(host1, host2, host3);
+    Flux<CustomerOrders> getCustomerOrders() {
+        return getCustomers()
+                .flatMap(customer -> Flux.zip(Mono.just(customer), getOrdersFor(customer.getId()).collectList()))
+                .map(tuple -> new CustomerOrders(tuple.getT1(), tuple.getT2()));
+    }
 
 
-		return this.http.get().uri("http://customers/customers").retrieve().bodyToFlux(Customer.class)
-			.timeout(Duration.ofSeconds(20))
-			.retryWhen(Retry.backoff(10, Duration.ofSeconds(10)))
-			.onErrorResume(exc -> Flux.empty());
-	}
+    Flux<Customer> getCustomers() {
+        return this.http.get().uri("http://localhost:8082/customers").retrieve().bodyToFlux(Customer.class)
+                .timeout(Duration.ofSeconds(20))
+                .retryWhen(Retry.backoff(10, Duration.ofSeconds(10)))
+                .onErrorResume(exc -> Flux.empty());
+    }
 
-	Flux<Order> getOrdersFor(Integer customerId) {
-		return this.rSocketRequester.route("orders.{customerId}", customerId).retrieveFlux(Order.class);
-	}
+    Flux<Order> getOrdersFor(Integer customerId) {
+        return this.rSocketRequester.route("orders.{customerId}", customerId).retrieveFlux(Order.class);
+    }
 }

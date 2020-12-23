@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.RequiredArgsConstructor;
+import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.availability.AvailabilityChangeEvent;
@@ -36,7 +37,7 @@ public class CustomersApplication {
 	}
 
 	@Bean
-	ApplicationListener<ApplicationReadyEvent> ready(
+	ApplicationRunner ready(
 		DatabaseClient dbc,
 		CustomerRepository repository) {
 		return event -> {
@@ -44,7 +45,7 @@ public class CustomersApplication {
 
 			var sql = """
 				    
-					 create table CUSTOMER( 
+					 create table if not exists CUSTOMER ( 
 					 	 id serial primary key not null, 
 					 	 name varchar(255) not null
 					 ) 
