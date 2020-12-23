@@ -42,14 +42,7 @@ public class CustomersApplication {
 		CustomerRepository repository) {
 		return event -> {
 
-
-			var sql = """
-				    
-					 create table if not exists CUSTOMER ( 
-					 	 id serial primary key not null, 
-					 	 name varchar(255) not null
-					 ) 
-				""";
+			var sql = " create table if not exists CUSTOMER (   id serial primary key not null,  name varchar(255) not null )   " ;
 
 			var integerMono = dbc.sql(sql).fetch().rowsUpdated();
 
