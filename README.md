@@ -2,6 +2,8 @@
 
 Cloud Native Java, 2021 Redux. This contains the code to the  updated version of my talk "Cloud Native Java"  
 
+If you have questions or comments, reach me on Twitter: @starbuxman or e-Mail: josh@Joshlong.com
+
 
 
 ## Bootiful Kubernetes 
