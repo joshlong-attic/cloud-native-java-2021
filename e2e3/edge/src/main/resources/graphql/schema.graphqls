@@ -1,0 +1,19 @@
+type Query {
+    customers: [Customer]
+}
+
+type Mutation {
+    addCustomer (name :String  ) : Customer
+}
+
+type Customer {
+    id : ID
+    name : String
+    onPto: Boolean
+    orders: [Order]
+}
+
+type Order  {
+    id : ID
+    customerId: ID
+}
