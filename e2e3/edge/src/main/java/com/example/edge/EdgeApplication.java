@@ -1,23 +1,22 @@
 package com.example.edge;
 
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-import lombok.RequiredArgsConstructor;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.cloud.gateway.route.RouteLocator;
 import org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder;
 import org.springframework.context.annotation.Bean;
-import org.springframework.graphql.data.method.annotation.*;
+import org.springframework.graphql.data.method.annotation.QueryMapping;
+import org.springframework.graphql.data.method.annotation.SchemaMapping;
 import org.springframework.http.HttpHeaders;
 import org.springframework.messaging.rsocket.RSocketRequester;
 import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
 
 import java.time.Duration;
 import java.util.List;
@@ -25,13 +24,25 @@ import java.util.List;
 @SpringBootApplication
 public class EdgeApplication {
 
-	public static void main(String[] args) {
-		SpringApplication.run(EdgeApplication.class, args);
+	@Bean
+	RouteLocator gateway(RouteLocatorBuilder rlb) {
+		return rlb
+			.routes()
+			.route(rs ->
+				rs
+					.path("/proxy").and().host("*.spring.io") // <- predicate
+					.filters(fs -> fs
+						.setPath("/customers")
+						.retry(10)
+						.addResponseHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, "*") // CORS
+					)
+					.uri("http://localhost:8080/")
+			)
+			.build();
 	}
 
-	@Bean
-	RSocketRequester rSocketRequester(RSocketRequester.Builder builder) {
-		return builder.tcp("localhost", 8181);
+	public static void main(String[] args) {
+		SpringApplication.run(EdgeApplication.class, args);
 	}
 
 	@Bean
@@ -40,125 +51,98 @@ public class EdgeApplication {
 	}
 
 	@Bean
-	RouteLocator gateway(RouteLocatorBuilder rlb) {
-		return
-			rlb
-				.routes()
-				.route(rs -> rs
-					.path("/proxy").and().host("*.spring.io")
-					.filters(fs -> fs
-						.setPath("/customers")
-						.addResponseHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-						.retry(10)
-					)
-					.uri("http://localhost:8080/")
-				)
-				.build();
+	RSocketRequester rSocketRequester(RSocketRequester.Builder builder) {
+		return builder.tcp("localhost", 8181);
+	}
+
+}
+
+
+@Controller
+class CrmGraphQlController {
+
+	private final CrmClient crm;
+
+	CrmGraphQlController(CrmClient crm) {
+		this.crm = crm;
+	}
+
+	@SchemaMapping(typeName = "Customer", field = "orders")
+	Flux<Order> orders(Customer customer) {
+		return crm.getOrdersFor(customer.id());
+	}
+
+//	@SchemaMapping(typeName = "Query", field = "customers")
+	@QueryMapping
+	Flux<Customer> customers() {
+		return this.crm.getCustomers();
 	}
 }
 
-@RestController
-@RequiredArgsConstructor
+
+@Controller
+@ResponseBody
 class CrmRestController {
 
-	private final CrmClient crmClient;
+	private final CrmClient crm;
+
+	CrmRestController(CrmClient crm) {
+		this.crm = crm;
+	}
 
 	@GetMapping("/cos")
-	Flux<CustomerOrders> get() {
-		return this.crmClient.getCustomerOrders();
+	Flux<CustomerOrder> getCustomerOrders() {
+		return this.crm.getCustomerOrders();
 	}
 }
 
-@RequiredArgsConstructor
 @Component
 class CrmClient {
 
+	private final RSocketRequester rSocket;
 	private final WebClient http;
 
-	private final RSocketRequester rSocket;
+	CrmClient(RSocketRequester rSocket, WebClient http) {
+		this.rSocket = rSocket;
+		this.http = http;
+	}
+
+	Flux<CustomerOrder> getCustomerOrders() {
+		return getCustomers()
+			.flatMap(c -> Mono.zip(
+				Mono.just(c),
+				getOrdersFor(c.id()).collectList()
+			))
+			.map(tuple2 -> new CustomerOrder(tuple2.getT1(), tuple2.getT2()));
+	}
 
 	Flux<Order> getOrdersFor(Integer customerId) {
-		return this.rSocket
-			.route("orders.{customerId}", customerId)
-			.retrieveFlux(Order.class);
+		return this.rSocket.route("orders.{customerId}", customerId).retrieveFlux(Order.class)
+			.retryWhen(Retry.backoff(10, Duration.ofSeconds(1)))
+			.onErrorResume(ex -> Flux.empty())
+			.timeout(Duration.ofSeconds(1))
+			;
 	}
 
 	Flux<Customer> getCustomers() {
-		return this.http.get().uri("http://localhost:8080/customers").retrieve().bodyToFlux(Customer.class);
-	}
-
-	Flux<CustomerOrders> getCustomerOrders() {
-		return this.getCustomers()
-			.flatMap(customer -> Mono.zip(
-					Mono.just(customer),
-					getOrdersFor(customer.getId()).collectList()
-				)
-			)
-			.map(tuple2 -> new CustomerOrders(tuple2.getT1(), tuple2.getT2()));
+		return this.http.get().uri("http://localhost:8080/customers").retrieve().bodyToFlux(Customer.class)
+			.retryWhen(Retry.backoff(10, Duration.ofSeconds(1)))
+			.onErrorResume(ex -> Flux.empty())
+			.timeout(Duration.ofSeconds(1))
+			;
 	}
 
 }
 
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-class CustomerOrders {
 
-	private Customer customer;
-	private List<Order> orders;
+record Customer(Integer id, String name) {
 }
 
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-class Order {
-	private Integer id, customerId;
+record Order(Integer id, Integer customerId) {
 }
 
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-class Customer {
-
-
-	private Integer id;
-	private String name;
+record CustomerOrder(Customer customer, List<Order> orders) {
 }
 
 
-@GraphQlController
-@RequiredArgsConstructor
-class CrmGraphqlController {
 
-	private final CrmClient crmClient;
-
-	// queries
-	// subscriptions
-	// mutations
-
-	//	@SchemaMapping (typeName = "Query"  ,field = "customers")
-	@QueryMapping
-	Flux<Customer> customers() {
-		return this.crmClient.getCustomers();
-	}
-
-	@SchemaMapping(typeName = "Customer")
-	Mono<Boolean> onPto(Customer customer) {
-		return Mono.just(false)
-			.delayElement(Duration.ofSeconds(3));
-	}
-
-	@MutationMapping
-	Mono<Customer> addCustomer(@Argument String name) {
-		System.out.println("adding " + name + '.');
-		return Mono.just(new Customer(1, name));
-	}
-
-	@SchemaMapping(typeName = "Customer")
-	Flux<Order> orders(Customer customer) {
-		return this.crmClient
-			.getOrdersFor(customer.getId());
-	}
-
-
-}
